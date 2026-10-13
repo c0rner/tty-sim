@@ -153,6 +153,8 @@ pub enum PresentationError {
     },
     #[error("presentation output is already finished")]
     Finished,
+    #[error("cannot clear history while an expectation is active")]
+    ExpectationActive,
     #[error("raw output stream offset overflowed")]
     OffsetOverflow,
     #[error(transparent)]

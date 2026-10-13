@@ -106,9 +106,18 @@ pub enum Command {
     Send(Vec<u8>),
     Show(Vec<u8>),
     Wait(Duration),
-    Expect { pattern: Vec<u8>, timeout: Duration },
+    /// Clears expectation history before and after a fixed waiting period.
+    /// Output remains visible during the period. Zero clears immediately.
+    Drain(Duration),
+    Expect {
+        pattern: Vec<u8>,
+        timeout: Duration,
+    },
     Mask(MaskRule),
-    Simulate { command: String, output: Vec<u8> },
+    Simulate {
+        command: String,
+        output: Vec<u8>,
+    },
 }
 
 impl fmt::Debug for Command {
@@ -123,6 +132,7 @@ impl fmt::Debug for Command {
             Self::Send(bytes) => redacted_bytes(formatter, "Send", bytes),
             Self::Show(bytes) => redacted_bytes(formatter, "Show", bytes),
             Self::Wait(duration) => formatter.debug_tuple("Wait").field(duration).finish(),
+            Self::Drain(duration) => formatter.debug_tuple("Drain").field(duration).finish(),
             Self::Expect { pattern, timeout } => formatter
                 .debug_struct("Expect")
                 .field(

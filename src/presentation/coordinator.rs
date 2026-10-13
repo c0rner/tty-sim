@@ -126,6 +126,36 @@ impl<S: OutputSink> OutputCoordinator<S> {
         Ok(())
     }
 
+    /// Clears received expectation history without changing presentation or stream state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`PresentationError`] if output failed, synchronization fails,
+    /// or an expectation is active.
+    pub fn clear_history(&self) -> Result<(), PresentationError> {
+        let mut state = self.lock_raw()?;
+        match &state.terminal {
+            TerminalState::Failed(source) => {
+                return Err(PresentationError::Output {
+                    source: Arc::clone(source),
+                });
+            }
+            TerminalState::Running | TerminalState::Eof => {}
+        }
+        if state.active_expectation.is_some() {
+            return Err(PresentationError::ExpectationActive);
+        }
+        debug!(
+            discarded_bytes = state.bytes.len(),
+            next_offset = state.next_offset,
+            "clearing raw-output expectation history"
+        );
+        state.bytes.clear();
+        state.first_offset = state.next_offset;
+        drop(state);
+        Ok(())
+    }
+
     /// Waits for a byte pattern in raw history or incoming child output.
     ///
     /// # Errors
@@ -567,6 +597,7 @@ impl From<PresentationError> for ExpectationError {
             PresentationError::Output { source } => Self::Output { source },
             PresentationError::FailureRecording { failure, .. } => Self::Output { source: failure },
             PresentationError::Finished => Self::Eof,
+            PresentationError::ExpectationActive => Self::AlreadyActive,
         }
     }
 }
@@ -653,6 +684,69 @@ mod tests {
             assert!(Instant::now() < deadline, "expectation did not activate");
             thread::yield_now();
         }
+    }
+
+    #[test]
+    fn clearing_history_preserves_presentation_state_and_excludes_partial_matches() {
+        let sink = RecordingSink::default();
+        let observations = sink.clone();
+        let mask = MaskRule::new(b"secret".to_vec(), b"***".to_vec()).unwrap();
+        let coordinator = OutputCoordinator::new(HistoryCapacity::default(), sink, &[mask]);
+
+        coordinator.accept_child_output(b"sec\x1b]11;").unwrap();
+        coordinator.clear_history().unwrap();
+        let responses = coordinator.accept_child_output(b"?\x07ret").unwrap();
+
+        assert_eq!(responses, b"\x1b]11;rgb:0000/0000/0000\x1b\\");
+        assert_eq!(joined_emissions(&observations), b"***");
+        assert!(matches!(
+            coordinator.wait_for_expectation(b"sec\x1b]11;?\x07ret", Duration::ZERO),
+            Err(ExpectationError::Timeout)
+        ));
+        coordinator
+            .wait_for_expectation(b"ret", Duration::ZERO)
+            .unwrap();
+    }
+
+    #[test]
+    fn clearing_history_preserves_eof_and_failures() {
+        let coordinator =
+            OutputCoordinator::new(HistoryCapacity::default(), RecordingSink::default(), &[]);
+        coordinator.accept_child_output(b"old").unwrap();
+        coordinator.finish().unwrap();
+        coordinator.clear_history().unwrap();
+        assert!(matches!(
+            coordinator.wait_for_expectation(b"old", Duration::ZERO),
+            Err(ExpectationError::Eof)
+        ));
+
+        let failure = coordinator
+            .record_reader_failure(io::Error::other("read failed"))
+            .unwrap();
+        assert!(matches!(
+            coordinator.clear_history(),
+            Err(PresentationError::Output { source }) if Arc::ptr_eq(&source, &failure)
+        ));
+    }
+
+    #[test]
+    fn clearing_history_cannot_interrupt_an_active_matcher() {
+        let coordinator = Arc::new(OutputCoordinator::new(
+            HistoryCapacity::default(),
+            RecordingSink::default(),
+            &[],
+        ));
+        coordinator.accept_child_output(b"tar").unwrap();
+        let waiter_coord = Arc::clone(&coordinator);
+        let waiter =
+            thread::spawn(move || waiter_coord.wait_for_expectation(b"target", TEST_TIMEOUT));
+        wait_until_active(&coordinator);
+        assert!(matches!(
+            coordinator.clear_history(),
+            Err(PresentationError::ExpectationActive)
+        ));
+        coordinator.accept_child_output(b"get").unwrap();
+        waiter.join().unwrap().unwrap();
     }
 
     #[test]
