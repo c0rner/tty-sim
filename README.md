@@ -76,6 +76,7 @@ steps:
   - show: "walkthrough complete\r\n"
 ```
 
+When `cwd` is omitted, the child starts in tty-sim's current working directory.
 Relative `cwd` values resolve from tty-sim's execution directory. The directory is
 validated before allocating a PTY. Environment strings replace inherited values;
 `null` or `~` removes an inherited variable. Root masks are active before the first

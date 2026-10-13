@@ -104,6 +104,7 @@ pub struct SpawnSpec {
     pub program: String,
     pub args: Vec<String>,
     pub env: Vec<EnvironmentChange>,
+    /// Child working directory; `None` inherits tty-sim's current working directory.
     pub current_dir: Option<PathBuf>,
     pub size: TerminalSize,
 }
