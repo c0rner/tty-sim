@@ -67,6 +67,8 @@ pub enum ParseErrorKind {
     InvalidDuration(String),
     #[error("invalid key `{0}`")]
     InvalidKey(String),
+    #[error("key list must not be empty")]
+    EmptyKeyList,
     #[error("hex byte values require an even number of ASCII hexadecimal digits")]
     InvalidHex,
     #[error("{0}")]
