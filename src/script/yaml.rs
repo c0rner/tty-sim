@@ -134,12 +134,42 @@ enum StepDto {
     Expect(ExpectDto),
     Wait(WaitDto),
     Drain(String),
-    Key(String),
+    Key(KeyDto),
     Type(String),
     Typing(TypingDto),
     Send(ByteValueDto),
     Show(ByteValueDto),
     Simulate(SimulateDto),
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum KeyDto {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+impl KeyDto {
+    fn into_bytes(self, location: SourceLocation) -> Result<Vec<u8>, ParseError> {
+        let keys = match self {
+            Self::Single(key) => Vec::from([key]),
+            Self::Multiple(keys) => keys,
+        };
+        if keys.is_empty() {
+            return Err(ParseError {
+                location,
+                kind: ParseErrorKind::EmptyKeyList,
+            });
+        }
+        let mut bytes = Vec::new();
+        for key in keys {
+            bytes.extend(parse_key_value(&key).ok_or(ParseError {
+                location,
+                kind: ParseErrorKind::InvalidKey(key),
+            })?);
+        }
+        Ok(bytes)
+    }
 }
 
 #[derive(Deserialize)]
@@ -272,10 +302,7 @@ fn convert_step(step: Spanned<StepDto>) -> Result<LocatedCommand, ParseError> {
             };
             Command::Wait(parse_duration(&value, location)?)
         }
-        StepDto::Key(key) => Command::Key(parse_key_value(&key).ok_or(ParseError {
-            location,
-            kind: ParseErrorKind::InvalidKey(key),
-        })?),
+        StepDto::Key(key) => Command::Key(key.into_bytes(location)?),
         StepDto::Type(text) => Command::Type(text),
         StepDto::Typing(TypingDto { min, max }) => {
             let minimum = parse_duration(&min, location)?;
@@ -412,6 +439,52 @@ steps:
                 ..
             } if timeout == Duration::from_millis(1_500)
         ));
+    }
+
+    #[test]
+    fn key_lists_preserve_order_and_use_the_existing_key_command() {
+        for source in [
+            "steps:\n  - key: [up, down, delete, enter, a, b, c, Ctrl+A, Alt+x, '#', ':', ' ']\n",
+            "steps:\n  - key:\n      - up\n      - down\n      - delete\n      - enter\n      - a\n      - b\n      - c\n      - Ctrl+A\n      - Alt+x\n      - '#'\n      - ':'\n      - ' '\n",
+        ] {
+            let script = parse_script(source).unwrap();
+            assert_eq!(
+                script.commands(),
+                Vec::from([Command::Key(
+                    b"\x1b[A\x1b[B\x1b[3~\rabc\x01\x1bx#: ".to_vec()
+                ),])
+            );
+            assert_eq!(
+                script.command_location(1),
+                Some(super::SourceLocation { line: 2, column: 5 })
+            );
+        }
+        assert_eq!(
+            parse_script("steps:\n  - key: [enter]").unwrap().commands(),
+            parse_script("steps:\n  - key: enter").unwrap().commands(),
+        );
+    }
+
+    #[test]
+    fn key_lists_fail_closed_on_empty_or_invalid_entries() {
+        let empty = parse_script("steps:\n  - key: []").unwrap_err();
+        assert!(matches!(empty.kind, ParseErrorKind::EmptyKeyList));
+        assert_eq!(empty.location.line, 2);
+
+        for invalid in ["Shift+A", "del", "", "é"] {
+            let source = format!("steps:\n  - send: before\n  - key: [enter, '{invalid}', a]\n");
+            let error = parse_script(&source).unwrap_err();
+            assert!(matches!(error.kind, ParseErrorKind::InvalidKey(ref key) if key == invalid));
+            assert_eq!(error.location.line, 3);
+        }
+        for invalid in [
+            "[enter, null]",
+            "[enter, [a]]",
+            "[enter, { key: a }]",
+            "{ keys: [a] }",
+        ] {
+            assert!(parse_script(&format!("steps:\n  - key: {invalid}")).is_err());
+        }
     }
 
     #[test]

@@ -89,6 +89,7 @@ Each step has exactly one command key:
 | `type: TEXT` | Send each UTF-8 character using the current typing range. |
 | `typing: { min: D, max: D }` | Change the range for later `type` and `simulate` steps. |
 | `key: KEY` | Send a supported key sequence immediately. |
+| `key: [KEY, ...]` | Send a non-empty list of keys in order without delays. |
 | `send: BYTES` | Send bytes immediately. |
 | `show: BYTES` | Emit bytes only to the presentation. |
 | `wait: DURATION` | Wait for a duration. |
@@ -180,6 +181,25 @@ F1 F2 F3 F4 F5 F6 F7 F8 F9 F10 F11 F12
 A single printable ASCII character is also a key. `Ctrl+A` through `Ctrl+Z`,
 `Alt+KEY`, and `Ctrl+Alt+A` through `Ctrl+Alt+Z` are supported. Unsupported or
 noncanonical modifier combinations fail closed.
+
+`key` accepts either a single key or a non-empty list. Lists can mix named keys,
+printable ASCII characters, and modifiers:
+
+```yaml
+steps:
+  - key: [up, down, delete, enter]
+  - key: [enter, a, b, c, enter]
+  - key:
+      - Ctrl+A
+      - delete
+      - a
+      - enter
+```
+
+All entries are validated before execution. Their byte sequences are sent
+together in the listed order, without typing delays. To wait for the child between
+keys, use separate `key` steps with `wait` or `expect`. Quote characters with special
+YAML meaning, such as `"#"` or `":"`.
 
 ## Exit codes
 
