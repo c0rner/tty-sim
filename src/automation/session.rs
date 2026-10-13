@@ -41,6 +41,13 @@ pub trait PresentationApi: Send + Sync {
     /// Returns a presentation error if installing the rule fails.
     fn install_mask(&self, rule: &MaskRule) -> Result<(), PresentationError>;
 
+    /// Clears received expectation history while preserving presentation and stream state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a presentation error if output failed or history cannot be cleared.
+    fn clear_history(&self) -> Result<(), PresentationError>;
+
     /// Blocks until the pattern appears in raw output or timeout expires.
     ///
     /// # Errors
@@ -96,6 +103,10 @@ impl<P: PresentationApi> PresentationApi for Arc<P> {
         timeout: Duration,
     ) -> Result<(), ExpectationError> {
         (**self).wait_for_expectation(pattern, timeout)
+    }
+
+    fn clear_history(&self) -> Result<(), PresentationError> {
+        (**self).clear_history()
     }
 
     fn failure(&self) -> Result<Option<Arc<OutputFailure>>, PresentationError> {
@@ -496,6 +507,18 @@ impl<T: TerminalSession, P: PresentationApi, S: Sleeper, R: DelaySource> Session
                 self.sleeper.sleep(*duration);
                 Ok(())
             }
+            Command::Drain(duration) => {
+                self.presentation
+                    .clear_history()
+                    .map_err(|error| map_presentation_error(error, context))?;
+                if !duration.is_zero() {
+                    self.sleeper.sleep(*duration);
+                    self.presentation
+                        .clear_history()
+                        .map_err(|error| map_presentation_error(error, context))?;
+                }
+                Ok(())
+            }
             Command::Expect { pattern, timeout } => self
                 .presentation
                 .wait_for_expectation(pattern, *timeout)
@@ -766,6 +789,7 @@ const fn command_name(command: &Command) -> &'static str {
         Command::Send(_) => "send",
         Command::Show(_) => "show",
         Command::Wait(_) => "wait",
+        Command::Drain(_) => "drain",
         Command::Expect { .. } => "expect",
         Command::Mask(_) => "mask",
         Command::Simulate { .. } => "simulate",
@@ -799,6 +823,7 @@ pub fn validate_command(
         | Command::Send(_)
         | Command::Show(_)
         | Command::Wait(_)
+        | Command::Drain(_)
         | Command::Expect { .. }
         | Command::Mask(_)
         | Command::Simulate { .. } => None,
@@ -845,9 +870,9 @@ fn map_presentation_error(error: PresentationError, context: CommandContext) -> 
                 resource: source.resource,
             },
         },
-        PresentationError::OffsetOverflow | PresentationError::Finished => {
-            internal_output_error(error.to_string(), context)
-        }
+        PresentationError::OffsetOverflow
+        | PresentationError::Finished
+        | PresentationError::ExpectationActive => internal_output_error(error.to_string(), context),
     }
 }
 
@@ -991,6 +1016,10 @@ mod tests {
     struct MockPresentation(Arc<Mutex<MockPresentationState>>);
 
     impl PresentationApi for MockPresentation {
+        fn clear_history(&self) -> Result<(), PresentationError> {
+            Ok(())
+        }
+
         fn accept_child_output(&self, _bytes: &[u8]) -> Result<Vec<u8>, PresentationError> {
             Ok(Vec::new())
         }
@@ -1230,6 +1259,121 @@ mod tests {
 
         assert!(term_state.lock().unwrap().writes.is_empty());
         assert_eq!(&*sleeps.lock().unwrap(), &[Duration::from_millis(123)]);
+    }
+
+    #[test]
+    fn drain_consumes_history_before_and_during_the_fixed_period() {
+        use crate::presentation::{CallbackSink, HistoryCapacity, OutputCoordinator};
+
+        struct OutputDuringSleep {
+            presentation: Arc<OutputCoordinator<CallbackSink>>,
+        }
+
+        impl Sleeper for OutputDuringSleep {
+            fn sleep(&mut self, duration: Duration) {
+                assert_eq!(duration, Duration::from_millis(250));
+                assert!(matches!(
+                    self.presentation
+                        .wait_for_expectation(b"old", Duration::ZERO),
+                    Err(ExpectationError::Timeout)
+                ));
+                self.presentation.accept_child_output(b"during").unwrap();
+            }
+        }
+
+        for duration in [Duration::ZERO, Duration::from_millis(250)] {
+            let emitted = Arc::new(Mutex::new(Vec::new()));
+            let sink_bytes = Arc::clone(&emitted);
+            let sink = CallbackSink::from_io(move |bytes| {
+                sink_bytes.lock().unwrap().extend_from_slice(bytes);
+                Ok(())
+            });
+            let presentation = Arc::new(OutputCoordinator::new(
+                HistoryCapacity::default(),
+                sink,
+                &[],
+            ));
+            presentation.accept_child_output(b"old").unwrap();
+            let terminal = MockTerminal::default();
+            let term_state = Arc::clone(&terminal.0);
+            let sleeper = OutputDuringSleep {
+                presentation: Arc::clone(&presentation),
+            };
+            let mut session = Session::new(
+                terminal,
+                Arc::clone(&presentation),
+                sleeper,
+                MockDelaySource::default(),
+                1024,
+                Duration::from_millis(50),
+                Duration::from_millis(50),
+            );
+
+            session.execute(&[Command::Drain(duration)]).unwrap();
+            for pattern in [b"old".as_slice(), b"during"] {
+                assert!(matches!(
+                    presentation.wait_for_expectation(pattern, Duration::ZERO),
+                    Err(ExpectationError::Timeout)
+                ));
+            }
+            presentation.accept_child_output(b"fresh").unwrap();
+            session
+                .execute(&[Command::Expect {
+                    pattern: b"fresh".to_vec(),
+                    timeout: Duration::ZERO,
+                }])
+                .unwrap();
+            assert!(term_state.lock().unwrap().writes.is_empty());
+            assert_eq!(
+                *emitted.lock().unwrap(),
+                if duration.is_zero() {
+                    b"oldfresh".to_vec()
+                } else {
+                    b"oldduringfresh".to_vec()
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn failure_during_drain_stops_before_the_next_command() {
+        struct FailureDuringSleep(MockPresentation);
+
+        impl Sleeper for FailureDuringSleep {
+            fn sleep(&mut self, _duration: Duration) {
+                self.0
+                    .record_reader_failure(io::Error::other("read failed"))
+                    .unwrap();
+            }
+        }
+
+        let terminal = MockTerminal::default();
+        let term_state = Arc::clone(&terminal.0);
+        let presentation = MockPresentation::default();
+        let sleeper = FailureDuringSleep(presentation.clone());
+        let mut session = Session::new(
+            terminal,
+            presentation,
+            sleeper,
+            MockDelaySource::default(),
+            1024,
+            Duration::from_millis(50),
+            Duration::from_millis(50),
+        );
+        let error = session
+            .execute(&[
+                Command::Drain(Duration::from_millis(250)),
+                Command::Send(b"next".to_vec()),
+            ])
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            ExecutionError::Output {
+                context: CommandContext::Index(1),
+                ..
+            }
+        ));
+        assert!(term_state.lock().unwrap().writes.is_empty());
     }
 
     #[test]

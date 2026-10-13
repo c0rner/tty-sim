@@ -133,6 +133,7 @@ enum StepDto {
     Mask(MaskDto),
     Expect(ExpectDto),
     Wait(WaitDto),
+    Drain(String),
     Key(String),
     Type(String),
     Typing(TypingDto),
@@ -263,6 +264,7 @@ fn convert_step(step: Spanned<StepDto>) -> Result<LocatedCommand, ParseError> {
     let command = match step.value {
         StepDto::Mask(mask) => Command::Mask(mask.into_rule(location)?),
         StepDto::Expect(expect) => convert_expect(expect, location)?,
+        StepDto::Drain(duration) => Command::Drain(parse_duration(&duration, location)?),
         StepDto::Wait(wait) => {
             let value = match wait {
                 WaitDto::Duration(value) => value,
@@ -362,6 +364,9 @@ steps:
   - show: |
       result
   - simulate: { command: "demo\n", output: done }
+  - drain: 250ms
+  - drain: 1.5s
+  - drain: 0ms
 "#,
         )
         .unwrap();
@@ -383,7 +388,16 @@ steps:
         assert_eq!(script.masks()[1].from(), "é".as_bytes());
         assert_eq!(script.masks()[1].to(), b"**");
         assert_eq!(script.masks()[2].from(), b"\xff");
-        assert_eq!(script.steps().len(), 9);
+        assert_eq!(script.steps().len(), 12);
+        assert_eq!(
+            script.steps()[9].command,
+            Command::Drain(Duration::from_millis(250))
+        );
+        assert_eq!(
+            script.steps()[10].command,
+            Command::Drain(Duration::from_millis(1_500))
+        );
+        assert_eq!(script.steps()[11].command, Command::Drain(Duration::ZERO));
         assert_eq!(script.steps()[0].location.line, 12);
         assert_eq!(script.steps()[4].command, Command::Type("hello".into()));
         assert_eq!(script.steps()[6].command, Command::Send(b"\r\n".to_vec()));
@@ -413,6 +427,8 @@ steps:
             "steps: !!seq []",
             "steps:\n  - <<: { send: value }",
             "steps: []\n---\nsteps: []",
+            "steps:\n  - drain: null",
+            "steps:\n  - drain: { duration: 250ms }",
         ] {
             assert!(parse_script(invalid).is_err(), "{invalid}");
         }
@@ -425,6 +441,7 @@ steps:
             ("steps:\n  - mask: ''", 2),
             ("masks:\n  - ''\nsteps: []", 2),
             ("steps:\n  - wait: soon", 2),
+            ("steps:\n  - drain: soon", 2),
             ("steps:\n  - key: Shift+A", 2),
             ("steps:\n  - send: { hex: abc }", 2),
             ("steps:\n  - typing: { min: 2ms, max: 1ms }", 2),

@@ -217,6 +217,10 @@ impl TerminalBackend for BackendAdapter {
 }
 
 impl<S: OutputSink> PresentationApi for OutputCoordinator<S> {
+    fn clear_history(&self) -> Result<(), PresentationError> {
+        self.clear_history()
+    }
+
     fn accept_child_output(&self, bytes: &[u8]) -> Result<Vec<u8>, PresentationError> {
         self.accept_child_output(bytes)
     }

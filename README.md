@@ -91,6 +91,7 @@ Each step has exactly one command key:
 | `send: BYTES` | Send bytes immediately. |
 | `show: BYTES` | Emit bytes only to the presentation. |
 | `wait: DURATION` | Wait for a duration. |
+| `drain: DURATION` | Clear expectation history, wait for a fixed period, then clear history again. |
 | `expect: BYTES` | Wait up to five seconds for raw PTY bytes. |
 | `expect: { pattern: BYTES, timeout: D }` | Wait with an explicit timeout. |
 | `mask: TEXT` / `mask: { from: BYTES, to: BYTES }` | Mask future presentation. |
@@ -124,6 +125,27 @@ Do not send several shell commands and assume one later prompt identifies the
 last command. Each command can produce its own matching prompt. Likewise, omitting
 the initial `expect` can make a later prompt expectation match the retained startup
 prompt immediately.
+
+Use `drain` to abandon buffered output before starting a new interaction:
+
+```yaml
+steps:
+  - drain: 250ms
+  - send: "echo 'Hello, world!'\n"
+  - expect: "$ "
+```
+
+`drain: 250ms` clears existing expectation history and consumes all output
+received during a fixed 250 ms period. Output is still displayed, with masks and
+terminal-query handling applied normally. The period uses the same duration format
+as `wait`, including `250ms` and `1.5s`; `drain: 0ms` clears history immediately.
+Incoming output does not restart the period.
+
+Place `drain` before `send`, `key`, or `type`. Draining after input can consume
+the response that the next `expect` should match. Only output received by tty-sim
+before the final clear is consumed; delayed output can still arrive afterward.
+Draining does not establish that the child is ready or that earlier commands have
+finished. Expecting a known prompt or completion marker establishes that boundary.
 
 The initial typing range is 10–200 ms. Both `min` and `max` are required in a
 `typing` step, and `min` must not exceed `max`.
