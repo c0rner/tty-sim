@@ -152,6 +152,19 @@ impl TerminalBackend for PtyBackend {
         &self,
         spec: &SpawnSpec,
     ) -> io::Result<RunningTerminal<Self::Input, Self::Output, Self::Child, Self::Control>> {
+        let directory = match &spec.current_dir {
+            Some(directory) => directory.clone(),
+            None => std::env::current_dir()?,
+        };
+        if !std::fs::metadata(&directory)?.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotADirectory,
+                format!(
+                    "child working directory is not a directory: {}",
+                    directory.display()
+                ),
+            ));
+        }
         let pair = native_pty_system()
             .openpty(pty_size(spec.size))
             .map_err(io::Error::other)?;
@@ -163,9 +176,7 @@ impl TerminalBackend for PtyBackend {
                 EnvironmentChange::Remove { name } => command.env_remove(name),
             }
         }
-        if let Some(directory) = &spec.current_dir {
-            command.cwd(directory);
-        }
+        command.cwd(&directory);
         let mut child = pair
             .slave
             .spawn_command(command)
@@ -437,9 +448,62 @@ mod tests {
     use nix::errno::Errno;
     use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 
-    use super::{ProcessGroup, PtyReader, SharedChild, classify_pty_read};
+    use super::{ProcessGroup, PtyBackend, PtyReader, SharedChild, classify_pty_read};
+    use crate::automation::terminal::{
+        ChildHandle, EnvironmentChange, SpawnSpec, TerminalBackend, TerminalControl,
+    };
 
     const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
+
+    #[test]
+    fn child_inherits_the_current_directory_unless_one_is_supplied() {
+        let inherited = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let alternate = if inherited == std::path::Path::new("/") {
+            std::env::temp_dir().canonicalize().unwrap()
+        } else {
+            std::path::PathBuf::from("/")
+        };
+        for directory in [None, Some(alternate.clone()), Some(".".into())] {
+            let expected = directory
+                .as_ref()
+                .unwrap_or(&inherited)
+                .canonicalize()
+                .unwrap();
+            let mut spec = SpawnSpec::new("/bin/sh");
+            spec.args = Vec::from(["-c".into(), "IFS= read -r release; pwd -P".into()]);
+            spec.env = Vec::from([EnvironmentChange::Set {
+                name: "HOME".into(),
+                value: alternate.to_string_lossy().into_owned(),
+            }]);
+            spec.current_dir = directory;
+            let mut running = PtyBackend.spawn(&spec).unwrap();
+            running.input.write_all(b"\n").unwrap();
+            running.input.flush().unwrap();
+            let mut output = String::new();
+            running.output.read_to_string(&mut output).unwrap();
+            assert!(running.child.wait().unwrap().success());
+            running.control.close().unwrap();
+            assert_eq!(output.trim(), expected.to_str().unwrap());
+        }
+    }
+
+    #[test]
+    fn invalid_child_directory_fails_before_spawning() {
+        for (directory, kind) in [
+            (
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"),
+                io::ErrorKind::NotADirectory,
+            ),
+            (
+                std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml/absent"),
+                io::ErrorKind::NotADirectory,
+            ),
+        ] {
+            let mut spec = SpawnSpec::new("/not/a/tty-sim-program");
+            spec.current_dir = Some(directory);
+            assert_eq!(PtyBackend.spawn(&spec).err().unwrap().kind(), kind);
+        }
+    }
 
     #[test]
     fn portable_pty_creates_an_owned_group_that_sigterm_can_end() {
