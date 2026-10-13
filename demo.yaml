@@ -1,0 +1,39 @@
+env:
+  SECRET: "secret_password"
+masks:
+  - "secret_password"
+  - from: "file2.txt"
+    to: "file2_masked.txt"
+  - "root"
+
+steps:
+  - typing:
+      min: 50ms
+      max: 300ms
+
+  - expect: "$ " # Consume the initial shell prompt before sending commands.
+
+  - type: "top\n"
+  - wait: 5s
+  - key: "q"
+  - expect: "$ "
+
+  - type: "echo $SECRET\n"
+  - expect: "secret_password"
+  - show: "Expected secret matched! $ "
+  - expect: "$ " # Consume shell prompt after echo command
+  - wait: 2s
+
+  - type: "sleep 2\n"
+  - expect: "$ "
+
+  - simulate:
+      command: "ls -l\n"
+      output: |-
+        total 10
+        -rw-r--r--  1 user  group  1234 Apr 27 12:34 file1.txt
+        -rw-r--r--  1 user  group  5678 Apr 27 12:34 file2.txt
+        drwxr-xr-x  2 user  group   512 Apr 27 12:34 dir1
+  - key: "enter"
+  - expect: "$ "
+  - send: "exit\n"
