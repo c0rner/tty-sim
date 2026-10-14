@@ -845,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_terminal_queries_are_emitted_to_sink_on_finish() {
+    fn incomplete_terminal_controls_are_discarded_on_finish() {
         let sink = RecordingSink::default();
         let observations = sink.clone();
         let coordinator = OutputCoordinator::new(HistoryCapacity::default(), sink, &[]);
@@ -855,7 +855,7 @@ mod tests {
         assert!(joined_emissions(&observations).is_empty());
 
         coordinator.finish().unwrap();
-        assert_eq!(joined_emissions(&observations), b"\x1b]11;");
+        assert!(joined_emissions(&observations).is_empty());
     }
 
     #[test]
