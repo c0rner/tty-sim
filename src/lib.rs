@@ -605,7 +605,12 @@ steps:
                     vec![b"visible\x1b]11;?".to_vec(), b"\x1b\\".to_vec()],
                 ),
                 step(background_response, vec![b"\x1b[".to_vec(), b"6n".to_vec()]),
-                step(cursor_response, vec![b"done".to_vec()]),
+                step(cursor_response, vec![b"\x1b]10;?\x07".to_vec()]),
+                step(
+                    b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
+                    vec![b"\x1b[>0c".to_vec()],
+                ),
+                step(b"\x1b[>0;0;0c", vec![b"done".to_vec()]),
             ],
             ScriptedEnd::Pending,
         );
@@ -635,7 +640,14 @@ steps:
 
         assert_eq!(
             *observations.input.lock().unwrap(),
-            [b"probe".as_slice(), background_response, cursor_response].concat()
+            [
+                b"probe".as_slice(),
+                background_response,
+                cursor_response,
+                b"\x1b]10;rgb:ffff/ffff/ffff\x1b\\",
+                b"\x1b[>0;0;0c"
+            ]
+            .concat()
         );
         assert_eq!(presentation.lock().unwrap().concat(), b"visibledonebarrier");
     }

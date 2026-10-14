@@ -263,10 +263,10 @@ impl<I: Write + Send, C: ChildHandle, T: TerminalControl> TerminalSession
     }
 
     fn join_reader(&mut self) -> Result<(), CleanupFailure> {
-        if let Some(reader) = self.reader.take() {
-            if reader.join().is_err() {
-                return Err(CleanupFailure::ReaderPanicked);
-            }
+        if let Some(reader) = self.reader.take()
+            && reader.join().is_err()
+        {
+            return Err(CleanupFailure::ReaderPanicked);
         }
         Ok(())
     }
@@ -608,18 +608,18 @@ impl<T: TerminalSession, P: PresentationApi, S: Sleeper, R: DelaySource> Session
     }
 
     fn terminate_group(&mut self, failures: &mut Vec<CleanupFailure>) -> TerminationOutcome {
-        if let Some(terminal) = self.terminal.as_mut() {
-            if let Err(source) = terminal.terminate_group() {
-                failures.push(operation_failure("send SIGTERM", source));
-            }
+        if let Some(terminal) = self.terminal.as_mut()
+            && let Err(source) = terminal.terminate_group()
+        {
+            failures.push(operation_failure("send SIGTERM", source));
         }
         match self.wait_for_group(self.termination_grace, "SIGTERM", failures) {
             GroupWait::Stopped => TerminationOutcome::Sigterm,
             GroupWait::Alive => {
-                if let Some(terminal) = self.terminal.as_mut() {
-                    if let Err(source) = terminal.kill_group() {
-                        failures.push(operation_failure("send SIGKILL", source));
-                    }
+                if let Some(terminal) = self.terminal.as_mut()
+                    && let Err(source) = terminal.kill_group()
+                {
+                    failures.push(operation_failure("send SIGKILL", source));
                 }
                 TerminationOutcome::Sigkill
             }
@@ -678,12 +678,12 @@ impl<T: TerminalSession, P: PresentationApi, S: Sleeper, R: DelaySource> Session
     }
 
     fn wait_for_child(&mut self, failures: &mut Vec<CleanupFailure>) {
-        if self.child_status.is_none() {
-            if let Some(terminal) = self.terminal.as_mut() {
-                match terminal.wait() {
-                    Ok(status) => self.child_status = Some(status),
-                    Err(source) => failures.push(operation_failure("reap child", source)),
-                }
+        if self.child_status.is_none()
+            && let Some(terminal) = self.terminal.as_mut()
+        {
+            match terminal.wait() {
+                Ok(status) => self.child_status = Some(status),
+                Err(source) => failures.push(operation_failure("reap child", source)),
             }
         }
     }
@@ -695,18 +695,18 @@ impl<T: TerminalSession, P: PresentationApi, S: Sleeper, R: DelaySource> Session
     }
 
     fn close_terminal(&mut self, failures: &mut Vec<CleanupFailure>) {
-        if let Some(terminal) = self.terminal.as_mut() {
-            if let Err(source) = terminal.close() {
-                failures.push(operation_failure("close terminal", source));
-            }
+        if let Some(terminal) = self.terminal.as_mut()
+            && let Err(source) = terminal.close()
+        {
+            failures.push(operation_failure("close terminal", source));
         }
     }
 
     fn join_reader(&mut self, failures: &mut Vec<CleanupFailure>) {
-        if let Some(terminal) = self.terminal.as_mut() {
-            if let Err(failure) = terminal.join_reader() {
-                failures.push(failure);
-            }
+        if let Some(terminal) = self.terminal.as_mut()
+            && let Err(failure) = terminal.join_reader()
+        {
+            failures.push(failure);
         }
     }
 
