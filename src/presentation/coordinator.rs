@@ -287,10 +287,10 @@ impl<S: OutputSink> OutputCoordinator<S> {
     ) -> Result<Arc<OutputFailure>, PresentationError> {
         let failure = Arc::new(OutputFailure::Reader(source));
         let recorded = self.record_shared_failure(Arc::clone(&failure))?;
-        if let Ok(mut state) = self.presentation.lock() {
-            if state.failure.is_none() {
-                state.failure = Some(Arc::clone(&recorded));
-            }
+        if let Ok(mut state) = self.presentation.lock()
+            && state.failure.is_none()
+        {
+            state.failure = Some(Arc::clone(&recorded));
         }
         Ok(recorded)
     }
