@@ -118,6 +118,7 @@ impl TerminalProtocol {
         if !self.oversized {
             match classify(&self.pending) {
                 Action::Forward => output.presentation.extend_from_slice(&self.pending),
+                Action::Replace(bytes) => output.presentation.extend(bytes),
                 Action::Respond(response) => output.responses.extend_from_slice(response),
                 Action::Suppress => debug!("suppressing unsupported terminal query"),
             }
@@ -128,11 +129,15 @@ impl TerminalProtocol {
 
 enum Action {
     Forward,
+    Replace(Vec<u8>),
     Respond(&'static [u8]),
     Suppress,
 }
 
 fn classify(sequence: &[u8]) -> Action {
+    if let Some(filtered) = filter_focus_modes(sequence) {
+        return Action::Replace(filtered);
+    }
     match sequence {
         b"\x1b[6n" => Action::Respond(b"\x1b[1;1R"),
         // A conservative VT100 identity without optional capabilities.
@@ -140,6 +145,45 @@ fn classify(sequence: &[u8]) -> Action {
         b"\x1b[>c" | b"\x1b[>0c" => Action::Respond(b"\x1b[>0;0;0c"),
         _ => classify_query(sequence),
     }
+}
+
+/// Focus events belong to the outer terminal, whose input is not routed to the
+/// child. Filter set/reset and save/restore so the child cannot enable reporting
+/// indirectly through a saved mode. Preserve the other parameters verbatim.
+fn filter_focus_modes(sequence: &[u8]) -> Option<Vec<u8>> {
+    let body = sequence.strip_prefix(b"\x1b[?")?;
+    let (&final_byte, parameters) = body.split_last()?;
+    if !matches!(final_byte, b'h' | b'l' | b's' | b'r')
+        || !parameters
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || *byte == b';')
+        || !parameters.split(|&byte| byte == b';').any(is_focus_mode)
+    {
+        return None;
+    }
+    let mut filtered = Vec::new();
+    for mode in parameters
+        .split(|&byte| byte == b';')
+        .filter(|mode| !is_focus_mode(mode))
+    {
+        if filtered.is_empty() {
+            filtered.extend_from_slice(b"\x1b[?");
+        } else {
+            filtered.push(b';');
+        }
+        filtered.extend_from_slice(mode);
+    }
+    if !filtered.is_empty() {
+        filtered.push(final_byte);
+    }
+    debug!("suppressing child focus-reporting mode change");
+    Some(filtered)
+}
+
+fn is_focus_mode(mode: &[u8]) -> bool {
+    mode.iter()
+        .position(|&byte| byte != b'0')
+        .is_some_and(|start| &mode[start..] == b"1004")
 }
 
 fn classify_query(sequence: &[u8]) -> Action {
@@ -283,6 +327,40 @@ mod tests {
             assert!(output.responses.is_empty());
         }
         assert_eq!(displayed, bytes);
+    }
+
+    #[test]
+    fn focus_reporting_is_filtered_without_changing_other_modes_at_every_split() {
+        for (control, expected) in [
+            (b"\x1b[?1004h".as_slice(), b"".as_slice()),
+            (b"\x1b[?1004l", b""),
+            (b"\x1b[?1004s", b""),
+            (b"\x1b[?1004r", b""),
+            (b"\x1b[?001004h", b""),
+            (b"\x1b[?1004;1004h", b""),
+            (b"\x1b[?1004;2004h", b"\x1b[?2004h"),
+            (b"\x1b[?1;1004;2004l", b"\x1b[?1;2004l"),
+            (b"\x1b[?1;1004s", b"\x1b[?1s"),
+            (b"\x1b[?1;1004r", b"\x1b[?1r"),
+            (b"\x1b[?2004;1004h", b"\x1b[?2004h"),
+            (b"\x1b[?10040h", b"\x1b[?10040h"),
+            (b"\x1b[1004h", b"\x1b[1004h"),
+            (b"\x1b[?1;2004h", b"\x1b[?1;2004h"),
+            (b"\x1b]0;1004h\x07", b"\x1b]0;1004h\x07"),
+        ] {
+            let bytes = [b"before".as_slice(), control, b"after"].concat();
+            let expected = [b"before".as_slice(), expected, b"after"].concat();
+            for split in 0..=bytes.len() {
+                let mut protocol = TerminalProtocol::default();
+                let mut first = protocol.process(&bytes[..split]);
+                let second = protocol.process(&bytes[split..]);
+                first.presentation.extend(second.presentation);
+                first.responses.extend(second.responses);
+                assert_eq!(first.presentation, expected, "{control:?}, split {split}");
+                assert!(first.responses.is_empty());
+                assert!(protocol.finish().is_empty());
+            }
+        }
     }
 
     #[test]
