@@ -5,9 +5,27 @@ driving one interactive program through a POSIX pseudo-terminal (PTY). It execut
 a strict YAML script sequentially, streams the child's byte output, waits for raw
 output, and masks presentation bytes without changing what expectations observe.
 
-tty-sim handles OSC 11 background-color and CSI 6n cursor-position queries inside
-the child PTY. Query bytes remain visible to raw `expect` matching but are not
-forwarded to stdout.
+tty-sim answers supported foreground/background-color, cursor-position, and
+terminal-identity queries inside the child PTY. Recognized unsupported queries
+and child focus-reporting mode changes are filtered from presentation output.
+Query bytes remain visible to raw `expect` matching.
+
+## Terminal protocol limitations
+
+The streaming control-sequence parser and filter are incomplete. They handle a
+limited set of ESC-prefixed terminal sequences, without full terminal parsing or
+screen emulation. Unknown extensions and some sequences containing embedded
+control bytes can pass through and cause the real terminal to send replies or
+events into the outer shell's input. Raw 8-bit C1 controls are not parsed.
+Filtering does not guarantee that terminal-generated input cannot leak into the
+outer shell, and is not a security boundary for untrusted child output.
+
+Known limitations include differences between raw-byte matching and how terminals
+interpret embedded C0 controls: a terminal may recognize a query or mode change
+that the filter misses. Extending parsing to cover all terminal behavior is outside
+this project's current scope. Future work could extract the parser into a focused
+module or standalone crate for independent development; no such extraction is
+part of the current implementation.
 
 ## Command line
 
