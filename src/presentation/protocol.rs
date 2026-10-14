@@ -6,7 +6,9 @@ const MAX_SEQUENCE_BYTES: usize = 64 * 1024;
 enum State {
     #[default]
     Ground,
-    Escape,
+    Escape {
+        intermediate: bool,
+    },
     Csi,
     String {
         osc: bool,
@@ -34,7 +36,9 @@ impl TerminalProtocol {
         for &byte in bytes {
             if matches!(self.state, State::Ground) {
                 if byte == 0x1b {
-                    self.state = State::Escape;
+                    self.state = State::Escape {
+                        intermediate: false,
+                    };
                     self.pending.push(byte);
                 } else {
                     output.presentation.push(byte);
@@ -51,15 +55,17 @@ impl TerminalProtocol {
             }
             match self.state {
                 State::Ground => unreachable!(),
-                State::Escape => match byte {
-                    b'[' => self.state = State::Csi,
-                    b']' | b'P' | b'_' | b'^' | b'X' => {
+                State::Escape { intermediate } => match byte {
+                    0x1b => self.restart(),
+                    0x18 | 0x1a => self.discard(),
+                    b'[' if !intermediate => self.state = State::Csi,
+                    b']' | b'P' | b'_' | b'^' | b'X' if !intermediate => {
                         self.state = State::String {
                             osc: byte == b']',
                             escape: false,
                         };
                     }
-                    0x20..=0x2f => {}
+                    0x20..=0x2f => self.state = State::Escape { intermediate: true },
                     _ => self.complete(&mut output),
                 },
                 State::Csi => {
@@ -103,7 +109,9 @@ impl TerminalProtocol {
     fn restart(&mut self) {
         self.discard();
         self.pending.push(0x1b);
-        self.state = State::Escape;
+        self.state = State::Escape {
+            intermediate: false,
+        };
     }
 
     fn complete(&mut self, output: &mut ProtocolOutput) {
@@ -275,6 +283,51 @@ mod tests {
             assert!(output.responses.is_empty());
         }
         assert_eq!(displayed, bytes);
+    }
+
+    #[test]
+    fn escape_intermediate_finals_preserve_following_text_at_every_split() {
+        for final_byte in [b'[', b']', b'P', b'_', b'^', b'X'] {
+            let mut bytes = b"\x1b(".to_vec();
+            bytes.push(final_byte);
+            bytes.extend_from_slice(b"plain text");
+            for split in 0..=bytes.len() {
+                let mut protocol = TerminalProtocol::default();
+                let mut first = protocol.process(&bytes[..split]);
+                let second = protocol.process(&bytes[split..]);
+                first.presentation.extend(second.presentation);
+                first.responses.extend(second.responses);
+                first.presentation.extend(protocol.finish());
+                assert_eq!(first.presentation, bytes, "split {split}");
+                assert!(first.responses.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn escape_restart_and_cancellation_do_not_leak_queries_at_every_split() {
+        for (bytes, displayed, response) in [
+            (
+                b"\x1b\x1b[6nafter".as_slice(),
+                b"after".as_slice(),
+                b"\x1b[1;1R".as_slice(),
+            ),
+            (b"\x1b(\x1b[6nafter", b"after", b"\x1b[1;1R"),
+            (b"\x1b\x18after", b"after", b""),
+            (b"\x1b\x1aafter", b"after", b""),
+            (b"\x1b(\x18after", b"after", b""),
+            (b"\x1b(\x1aafter", b"after", b""),
+        ] {
+            for split in 0..=bytes.len() {
+                let mut protocol = TerminalProtocol::default();
+                let mut first = protocol.process(&bytes[..split]);
+                let second = protocol.process(&bytes[split..]);
+                first.presentation.extend(second.presentation);
+                first.responses.extend(second.responses);
+                assert_eq!(first.presentation, displayed, "{bytes:?}, split {split}");
+                assert_eq!(first.responses, response, "{bytes:?}, split {split}");
+            }
+        }
     }
 
     #[test]
