@@ -1,32 +1,57 @@
+# Demo script for tty-sim
+# Run with: tty-sim --script demo.yaml --command bash
+
 env:
+  TERM: xterm-color
   SECRET: "secret_password"
+
 masks:
   - "secret_password"
   - from: "file2.txt"
     to: "file2_masked.txt"
-  - "root"
+  - "user"
 
 steps:
   - typing:
-      min: 50ms
-      max: 300ms
+      min: 40ms
+      max: 180ms
 
-  - expect: "$ " # Consume the initial shell prompt before sending commands.
+  - send: "clear\n"
+  - drain: 250ms # Consume all input before sending commands.
 
-  - type: "top\n"
-  - wait: 5s
-  - key: "q"
+  # Demonstrate a 'vi' session
+  - type: "# Start a 'vi' session\n"
+  - expect: "$ "
+  - type: "vi\n"
+  - expect: "~"
+  - wait: 2s
+  - type: "ggiWe are now in a vi session.\n"
+  - wait: 1s
+  - key: Esc
+  - type: ":q!\n"
   - expect: "$ "
 
+  # Demonstrate key combinations
+  - type: "# Interrupt 'sleep 60' with Ctrl+C\nsleep 60\n"
+  - expect: "$ "
+  - wait: 1s
+  - key: Ctrl+c
+  - expect: "$ "
+  - wait: 1s
+
+  # Demonstrate masking of secrets
+  - type: "# Secrets can be masked\n"
+  - expect: "$ "
   - type: "echo $SECRET\n"
   - expect: "secret_password"
-  - show: "Expected secret matched! $ "
-  - expect: "$ " # Consume shell prompt after echo command
+  - show: "# Expected secret matched! We can still expect on masked data"
+  - key: "enter"
+  - drain: 250ms # Consume all input after showing the secret.
   - wait: 2s
 
-  - type: "sleep 2\n"
-  - expect: "$ "
-
+  # Demonstrate simulated output
+  - type: "# Simulate command and output of 'ls -l'\n"
+  - wait: 1s
   - simulate:
       command: "ls -l\n"
       output: |-
@@ -35,5 +60,5 @@ steps:
         -rw-r--r--  1 user  group  5678 Apr 27 12:34 file2.txt
         drwxr-xr-x  2 user  group   512 Apr 27 12:34 dir1
   - key: "enter"
-  - expect: "$ "
-  - send: "exit\n"
+  - drain: 1s
+  - key: "Ctrl+d"

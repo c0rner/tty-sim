@@ -36,7 +36,6 @@ pub fn parse_script(source: &str) -> Result<Script, ParseError> {
         duplicate_keys: DuplicateKeyPolicy::Error,
         merge_keys: MergeKeyPolicy::Error,
         reject_unsupported_tags: true,
-        emit_comments: false,
         with_snippet: false,
         strict_booleans: true,
     };
