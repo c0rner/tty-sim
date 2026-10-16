@@ -1,8 +1,8 @@
 use std::thread;
 use std::time::Duration;
 
-use rand::rngs::StdRng;
-use rand::{RngCore, SeedableRng};
+use rand::rngs::{StdRng, SysRng};
+use rand::{Rng, SeedableRng};
 
 /// Contract for sleeping a specified duration.
 pub trait Sleeper: Send {
@@ -42,8 +42,10 @@ impl RandomPolicy {
     }
 
     pub fn from_entropy() -> Self {
+        let mut rng = SysRng;
         Self {
-            random: StdRng::from_os_rng(),
+            random: StdRng::try_from_rng(&mut rng)
+                .expect("failed to initialize StdRng from SysRng"),
         }
     }
 }
