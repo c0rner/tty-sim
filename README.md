@@ -1,39 +1,46 @@
 # tty-sim
 
-`tty-sim` is a synchronous terminal-automation library and command-line tool for
-driving one interactive program through a POSIX pseudo-terminal (PTY). It executes
-a strict YAML script sequentially, streams the child's byte output, waits for raw
-output, and masks presentation bytes without changing what expectations observe.
+**Script your terminal demos and interactive tests.**
 
-tty-sim answers supported foreground/background-color, cursor-position, and
-terminal-identity queries inside the child PTY. Recognized unsupported queries
-and child focus-reporting mode changes are filtered from presentation output.
-Query bytes remain visible to raw `expect` matching.
+`tty-sim` runs an interactive program and follows a YAML script to type commands,
+press keys, and wait for responses while showing the session live. Use it to make
+repeatable walkthroughs or automate terminal interactions.
 
-## Terminal protocol limitations
+- Type at a natural pace, with configurable delays.
+- Wait for expected output before continuing to the next step.
+- Mask sensitive text in the displayed output.
+- Simulate commands and responses for a walkthrough.
 
-The streaming control-sequence parser and filter are incomplete. They handle a
-limited set of ESC-prefixed terminal sequences, without full terminal parsing or
-screen emulation. Unknown extensions and some sequences containing embedded
-control bytes can pass through and cause the real terminal to send replies or
-events into the outer shell's input. Raw 8-bit C1 controls are not parsed.
-Filtering does not guarantee that terminal-generated input cannot leak into the
-outer shell, and is not a security boundary for untrusted child output.
-
-Known limitations include differences between raw-byte matching and how terminals
-interpret embedded C0 controls: a terminal may recognize a query or mode change
-that the filter misses. Extending parsing to cover all terminal behavior is outside
-this project's current scope. Future work could extract the parser into a focused
-module or standalone crate for independent development; no such extraction is
-part of the current implementation.
+Use it as a command-line tool or embed it in a Rust application.
 
 ## Command line
+
+Save this as `hello.yaml`:
+
+```yaml
+env:
+  PS1: "$ "
+
+steps:
+  - expect: "$ "
+  - type: "echo 'Hello, world!'"
+  - key: Enter
+  - expect: "$ "
+  - send: "exit\n"
+```
 
 Build with the stable Rust toolchain and run:
 
 ```text
-cargo run -- --script demo.yaml --command /bin/sh --
+cargo run -- --script hello.yaml --command /bin/sh -- -i
 ```
+
+This opens an interactive shell, waits for its prompt, types the greeting command,
+presses Enter, waits for the next prompt, and exits. `PS1` sets a predictable prompt
+for the script to match.
+
+For a fuller showcase with editing, key combinations, masking, and simulated
+output, see [demo.yaml](demo.yaml).
 
 The executable syntax is:
 
@@ -51,7 +58,7 @@ Durations use integer milliseconds (`250ms`) or integer/decimal seconds (`2s`,
 For script sequencing diagnostics, enable debug logging:
 
 ```text
-RUST_LOG=tty_sim=debug cargo run -- --script demo.yaml --command bash
+RUST_LOG=tty_sim=debug cargo run -- --script hello.yaml --command /bin/sh -- -i
 ```
 
 Debug events identify command starts and completions and show whether an
@@ -62,37 +69,9 @@ truncation, and terminal-protocol response sizes.
 
 ## YAML scripts
 
-A script is one YAML mapping with a required `steps` sequence. `cwd`, `env`, and
-`masks` are optional:
-
-```yaml
-cwd: fixtures/app
-
-env:
-  TERM: xterm-256color
-  AWS_PROFILE: demo
-  AWS_SECRET_ACCESS_KEY: null
-
-masks:
-  - secret-password
-  - from: 192.168.1.100
-    to: 10.0.0.1
-
-steps:
-  - expect: "$ "
-  - send: "clear\n"
-  - expect: "$ "
-  - wait: 500ms
-  - typing: { min: 20ms, max: 50ms }
-  - type: "gh auth status\n"
-  - expect: "$ "
-  - simulate:
-      command: "ghst login -p developer\n"
-      output: |-
-        DEVICE AUTHORIZATION REQUIRED
-        Waiting for authorization in browser...
-  - show: "walkthrough complete\r\n"
-```
+A script is one YAML mapping with a required `steps` sequence, as shown above.
+`cwd`, `env`, and `masks` are optional settings for the working directory,
+environment, and output masking.
 
 When `cwd` is omitted, the child starts in tty-sim's current working directory.
 Relative `cwd` values resolve from tty-sim's execution directory. The directory is
@@ -261,6 +240,28 @@ assert!(completion.status().success());
 
 Always consume an engine with `finish()`, `wait_for_exit()`, or `terminate()`.
 Dropping an unfinished engine performs only best-effort cleanup.
+
+## Terminal protocol limitations
+
+tty-sim answers supported foreground/background-color, cursor-position, and
+terminal-identity queries inside the child PTY. Recognized unsupported queries
+and child focus-reporting mode changes are filtered from presentation output.
+Query bytes remain visible to raw `expect` matching.
+
+The streaming control-sequence parser and filter are incomplete. They handle a
+limited set of ESC-prefixed terminal sequences, without full terminal parsing or
+screen emulation. Unknown extensions and some sequences containing embedded
+control bytes can pass through and cause the real terminal to send replies or
+events into the outer shell's input. Raw 8-bit C1 controls are not parsed.
+Filtering does not guarantee that terminal-generated input cannot leak into the
+outer shell, and is not a security boundary for untrusted child output.
+
+Known limitations include differences between raw-byte matching and how terminals
+interpret embedded C0 controls: a terminal may recognize a query or mode change
+that the filter misses. Extending parsing to cover all terminal behavior is outside
+this project's current scope. Future work could extract the parser into a focused
+module or standalone crate for independent development; no such extraction is
+part of the current implementation.
 
 ## Architecture
 
