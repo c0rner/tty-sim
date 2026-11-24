@@ -9,7 +9,7 @@ license = "Apache-2.0"
 argh = "0.1"
 filedescriptor = "0.8"
 granit-parser = "2.0"
-nix = { version = "0.31", features = ["signal"] }
+nix = { version = "0.32", features = ["signal"] }
 portable-pty = "0.9"
 rand = "0.10"
 serde = { version = "1.0", features = ["derive"] }
